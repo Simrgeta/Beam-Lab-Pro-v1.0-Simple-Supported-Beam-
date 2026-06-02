@@ -1,0 +1,372 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>BEAM•LAB Pro</title>
+    <script src="https://cdn.plot.ly/plotly-2.35.2.min.js"></script>
+    <link rel="stylesheet" href="/static/style.css">
+    <link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.6.0/css/all.min.css" rel="stylesheet">
+	<link rel="icon" type="image/png" href="/static/favicon.png">
+</head>
+<body>
+    <div class="header">
+        <h1>BEAM<span class="accent">•</span>LAB <span class="pro">PRO</span></h1>
+        <div class="controls-bar">
+            <div class="param-group">
+                <label>Length L (m)</label>
+                <input type="number" id="L" value="1" disabled step="0.1">
+            </div>
+            <div class="param-group">
+                <label>Point Load P (kg)</label>
+                <input type="number" id="P" value="0" disabled step="1">
+            </div>
+			<div class="param-group">
+				<label>Position x (m)</label>
+				<input type="number"
+					   id="load_position_header"
+					   value="0.00"
+					   disabled
+					   step="0.01">
+			</div>
+            <div class="param-group">
+                <label>E (GPa)</label>
+                <input type="number" id="E" value="210" step="1">
+            </div>
+            <div class="param-group">
+                <label>I (×10⁻⁶ m⁴)</label>
+                <input type="number" id="I" value="0.039852" step="10">
+            </div>
+            <div class="param-group">
+                <label>y (mm)</label>
+                <input type="number" id="y" value="15" step="5">
+            </div>
+        </div>
+    </div>
+
+    <div class="main-grid">
+        <!-- Beam Visualization -->
+        <div class="panel beam-viz">
+            <h2><i class="fas fa-drafting-compass"></i> Beam Diagram</h2>
+           
+            <!-- Simple Beam -->
+            <div id="beam-svg" class="beam-container"></div>
+        </div>
+
+        <!-- Global Results -->
+        <div class="panel scroll">
+            <h2><i class="fas fa-globe"></i> Global Reactions</h2>
+            <div id="global" class="data-box"></div>
+        </div>
+
+        <!-- SFD -->
+        <div class="panel">
+            <h2><i class="fas fa-chart-line"></i> Shear Force Diagram (SFD)</h2>
+            <div id="sfd" class="plot"></div>
+        </div>
+
+        <!-- BMD -->
+        <div class="panel">
+            <h2><i class="fas fa-chart-line"></i> Bending Moment Diagram (BMD)</h2>
+            <div id="bmd" class="plot"></div>
+        </div>
+
+        <!-- Deflection -->
+        <div class="panel">
+            <h2><i class="fas fa-arrow-down"></i> Deflection Curve (mm)</h2>
+            <div id="deflection" class="plot"></div>
+        </div>
+
+        <!-- Local Analysis -->
+        <div class="panel scroll">
+            <h2><i class="fas fa-crosshairs"></i> Local @ x = <span id="current_x">0.00</span> m</h2>
+			<!-- Beautiful Slider -->
+            <div class="premium-slider-container">
+                <input type="range" id="load_pos_slider" min="0" max="100" value="0"
+                       oninput="updateLoadPos(this.value)">
+                <div class="slider-labels">
+                    <span>0.00 m</span>
+                    <input type="number" id="load_pos_display" value="0.00" step="0.01"
+                           style="color:#00ffaa; font-weight:600; background:none; border:none; width:85px; text-align:center; font-size:15px;">
+                    <span id="beam_length_display">1.00 m</span>
+                </div>
+            </div>
+            <div id="local" class="data-box"></div>
+        </div>
+    </div>
+
+    <div class="footer">
+
+		<button onclick="updateAll()" class="export-btn">
+			<i class="fas fa-sync"></i>
+			Refresh
+		</button>
+
+		<button onclick="exportExcel()" class="export-btn export-green">
+			<i class="fas fa-file-excel"></i>
+			Export Report
+		</button>
+
+		<span class="status">
+			Real-time Analysis
+		</span>
+
+	</div>
+
+	<!-- Graph Full-Screen Modal -->
+	<div id="graph-modal" class="graph-modal">
+		<div class="modal-content">
+			<div class="modal-header">
+				<h2 id="modal-title"></h2>
+				<button class="modal-close" onclick="closeModal()">
+					<i class="fas fa-times"></i>
+				</button>
+			</div>
+			<div id="modal-plot" class="modal-plot"></div>
+		</div>
+	</div>
+	
+    <script>
+    let currentX = 0.0;
+    let initialized = false;
+    let autoUpdateInterval = null;
+    let debounceTimer;
+
+    function debouncedUpdate() {
+        clearTimeout(debounceTimer);
+        debounceTimer = setTimeout(updateAll, 150);
+    }
+
+    function createPlot(divId, x, y, title, color, fill = false) {
+        const container = document.getElementById(divId);
+        const trace = {
+            x: x, y: y, mode: 'lines',
+            line: { color: color, width: 3.5 },
+            fill: fill ? 'tozeroy' : 'none'
+        };
+        const layout = {
+            margin: { l: 55, r: 30, t: 45, b: 55 },
+            plot_bgcolor: "#1a1f2e", paper_bgcolor: "#11151f",
+            font: { color: "#ddd" },
+            title: { text: title, font: { size: 16, color: "#00ffaa" } },
+            xaxis: { title: "Position (m)", gridcolor: "#333" },
+            yaxis: { gridcolor: "#333" },
+            showlegend: false
+        };
+        Plotly.react(divId, [trace], layout, {responsive: true});
+        container.style.cursor = "pointer";
+        container.onclick = () => openFullScreenPlot(divId, x, y, title, color, fill);
+    }
+
+    async function updateAll() {
+        try {
+            const L = parseFloat(document.getElementById('L').value) || 1;
+            const E = parseFloat(document.getElementById('E').value) || 210;
+            const I = parseFloat(document.getElementById('I').value) || 0.039852;
+            const y = parseFloat(document.getElementById('y').value) || 15;
+
+            const res = await fetch(`/data?L=${L}&E=${E}&I=${I}&y=${y}&x=${currentX}`);
+            const data = await res.json();
+			
+			const overlay = document.getElementById("loadingOverlay");
+
+			if(data.busy){
+				overlay.style.display = "flex";
+			}else{
+				overlay.style.display = "none";
+			}
+			
+            if (data.error) throw new Error(data.error);
+
+            // Update displays
+            document.getElementById('P').value = ((data.P) / (9.81)).toFixed(2);
+            document.getElementById('beam_length_display').textContent = L.toFixed(2) + " m";
+            document.getElementById('load_position_header').value = data.load_pos.toFixed(2);
+            document.getElementById('current_x').textContent = currentX.toFixed(2);
+
+            // Global Results
+            document.getElementById('global').innerHTML = `
+                <div class="result-row"><span>Ra (Left)</span><span class="value">${data.Ra.toFixed(2)} N</span></div>
+                <div class="result-row"><span>Rb (Right)</span><span class="value">${data.Rb.toFixed(2)} N</span></div>
+                <div class="result-row"><span>Max Shear</span><span class="value">${Math.max(...data.V.map(v => Math.abs(v))).toFixed(2)} N</span></div>
+                <div class="result-row"><span>Max Moment</span><span class="value">${Math.max(...data.M.map(m => Math.abs(m))).toFixed(2)} Nm</span></div>
+            `;
+
+            // Local Results
+            document.getElementById('local').innerHTML = `
+                <div class="result-row"><span>V(x)</span><span class="value">${data.Vx.toFixed(3)} N</span></div>
+                <div class="result-row"><span>M(x)</span><span class="value">${data.Mx.toFixed(3)} Nm</span></div>
+                <div class="result-row"><span>σ(x)</span><span class="value">${(data.sigma/1e6).toFixed(2)} MPa</span></div>
+                <div class="result-row"><span>δ(x)</span><span class="value">${(data.delta_x * 1000000).toFixed(3)} µm</span></div>
+            `;
+
+            // Update Plots & Beam
+            createPlot("sfd", data.X, data.V, "Shear Force (N)", "#00ff88", true);
+            createPlot("bmd", data.X, data.M, "Bending Moment (Nm)", "#ffaa00");
+            createPlot("deflection", data.X, data.delta.map(d => d*1000000), "Deflection (µm)", "#44aaff");
+            updateBeamViz(L, data.load_pos);
+
+            initialized = true;
+        } catch (err) {
+            console.error("Update failed:", err);
+        }
+    }
+
+    function updateLoadPos(percent) {
+        const L = parseFloat(document.getElementById('L').value) || 1;
+        currentX = (percent / 100) * L;
+        // Clamp to valid range
+        currentX = Math.max(0, Math.min(L, currentX));
+        document.getElementById('load_pos_display').value = currentX.toFixed(2);
+        debouncedUpdate();
+    }
+
+    function updateBeamViz(L, loadPos) {
+        const svg = document.getElementById('beam-svg');
+        loadPos = Math.max(0, Math.min(L, loadPos)); // Extra safety
+        svg.innerHTML = `
+            <svg width="100%" height="170" viewBox="0 0 1000 170">
+                <line x1="80" y1="85" x2="920" y2="85" stroke="#555" stroke-width="32" stroke-linecap="round"/>
+                <polygon points="70,110 90,110 80,145" fill="#00ff88"/>
+                <polygon points="910,110 930,110 920,145" fill="#00ff88"/>
+                <line x1="${80 + 840*(loadPos/L)}" y1="8" x2="${80 + 840*(loadPos/L)}" y2="51" stroke="#ff3366" stroke-width="10" stroke-linecap="round"/>
+                <polygon points="${60 + 840*(loadPos/L)},51 ${100 + 840*(loadPos/L)},51 ${80 + 840*(loadPos/L)},78" fill="#ff3366"/>
+                <text x="45" y="155" fill="#aaa" font-size="16">A</text>
+                <text x="925" y="155" fill="#aaa" font-size="16">B</text>
+            </svg>
+        `;
+    }
+
+    function setupPositionInput() {
+        const posInput = document.getElementById('load_pos_display');
+        
+        posInput.addEventListener('change', function() {
+            let newPos = parseFloat(this.value);
+            const L = parseFloat(document.getElementById('L').value) || 1;
+
+            if (isNaN(newPos)) newPos = 0;
+
+            // STRICT CLAMPING BETWEEN 0 AND L
+            newPos = Math.max(0, Math.min(L, newPos));
+
+            currentX = newPos;
+            this.value = currentX.toFixed(2);           // Force correct display
+
+            const percent = (currentX / L) * 100;
+            document.getElementById('load_pos_slider').value = percent;
+
+            updateAll();
+        });
+
+        posInput.addEventListener('keypress', function(e) {
+            if (e.key === 'Enter') this.blur();
+        });
+
+        // Also prevent invalid input while typing
+        posInput.addEventListener('input', function() {
+            let val = parseFloat(this.value);
+            const L = parseFloat(document.getElementById('L').value) || 1;
+            if (!isNaN(val)) {
+                if (val < 0) this.value = "0.00";
+                if (val > L) this.value = L.toFixed(2);
+            }
+        });
+    }
+
+    function openFullScreenPlot(divId, x, y, title, color, fill) {
+        const modal = document.getElementById('graph-modal');
+        const modalTitle = document.getElementById('modal-title');
+        modalTitle.textContent = title;
+        modal.style.display = "flex";
+        const trace = { x: x, y: y, mode: 'lines', line: { color: color, width: 5 }, fill: fill ? 'tozeroy' : 'none' };
+        const layout = {
+            margin: { l: 70, r: 50, t: 80, b: 80 },
+            plot_bgcolor: "#1a1f2e", paper_bgcolor: "#11151f",
+            font: { color: "#eee", size: 14 },
+            title: { text: title, font: { size: 24, color: "#00ffaa" } },
+            xaxis: { title: "Position along beam (m)", gridcolor: "#444" },
+            yaxis: { gridcolor: "#444" },
+            showlegend: false
+        };
+        Plotly.react("modal-plot", [trace], layout, {responsive: true});
+    }
+
+    function closeModal() {
+        document.getElementById('graph-modal').style.display = "none";
+    }
+
+    function startLiveUpdate() {
+        if (autoUpdateInterval) clearInterval(autoUpdateInterval);
+        autoUpdateInterval = setInterval(updateAll, 1000);
+    }
+
+    window.onload = () => {
+        setTimeout(async () => {
+            await initializeBeam();
+            setupPositionInput();
+            startLiveUpdate();
+        }, 500);
+    };
+
+    async function initializeBeam() {
+        const L = parseFloat(document.getElementById('L').value) || 1;
+        const E = parseFloat(document.getElementById('E').value) || 210;
+        const I = parseFloat(document.getElementById('I').value) || 0.039852;
+        const y = parseFloat(document.getElementById('y').value) || 15;
+
+        const res = await fetch(`/data?L=${L}&E=${E}&I=${I}&y=${y}&x=0`);
+        const data = await res.json();
+
+        currentX = Math.max(0, Math.min(L, data.load_pos || 0));
+
+        const percent = (currentX / L) * 100;
+        document.getElementById('load_pos_slider').value = percent;
+        document.getElementById('load_pos_display').value = currentX.toFixed(2);
+        document.getElementById('current_x').textContent = currentX.toFixed(2);
+
+        initialized = true;
+        updateAll();
+    }
+	
+	function exportExcel(){
+
+		const L = document.getElementById("L").value;
+		const E = document.getElementById("E").value;
+		const I = document.getElementById("I").value;
+		const y = document.getElementById("y").value;
+
+		window.open(
+			`/export?L=${L}&E=${E}&I=${I}&y=${y}`,
+			"_blank"
+		);
+	}
+	
+</script>
+
+<div id="loadingOverlay" class="loading-overlay">
+    <div class="loading-box">
+
+        <div class="warning-icon">
+            <i class="fas fa-triangle-exclamation"></i>
+        </div>
+
+        <div class="spinner"></div>
+
+        <h2 class="warning-title">
+            SYSTEM STABILIZING
+        </h2>
+
+        <p class="warning-text">
+            ⚠ PLEASE WAIT UNTIL THIS WARNING DISAPPEARS.
+            <br><br>
+            DO NOT PLACE OR REMOVE ANY LOAD WHILE THIS MESSAGE IS ACTIVE.
+            <br><br>
+            OTHERWISE THE SYSTEM MAY DISPLAY AN INCORRECT LOAD POSITION,
+            SHEAR FORCE, OR BENDING MOMENT VALUE.
+        </p>
+
+    </div>
+</div>
+
+</body>
+</html>
