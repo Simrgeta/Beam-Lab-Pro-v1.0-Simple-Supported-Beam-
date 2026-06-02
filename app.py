@@ -14,6 +14,21 @@ from openpyxl.chart import (
     LineChart,
     Reference
 )
+import sys
+import os
+
+# This helper function finds the correct path whether running normally or as an EXE
+def get_resource_path(relative_path):
+    if hasattr(sys, '_MEIPASS'):
+        return os.path.join(sys._MEIPASS, relative_path)
+    return os.path.join(os.path.abspath("."), relative_path)
+
+# Tell Flask exactly where the templates and static folders are hidden
+app = Flask(
+    __name__,
+    template_folder=get_resource_path('templates'),
+    static_folder=get_resource_path('static')
+)
 
 SERIAL_PORT = 'COM5'
 BAUD_RATE = 57600
