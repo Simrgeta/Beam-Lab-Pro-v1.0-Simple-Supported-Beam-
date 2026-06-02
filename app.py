@@ -738,4 +738,3 @@ def clear_session():
 if __name__ == "__main__":
     print("🚀 Starting Beam Lab Server - Auto Hot-Tare Sequence Armed")
     app.run(debug=True, port=5000, use_reloader=False)
-    
